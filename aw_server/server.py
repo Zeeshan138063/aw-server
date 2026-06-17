@@ -14,7 +14,7 @@ from flask import (
 )
 from flask_cors import CORS
 
-from . import rest
+from . import pcd_rest, rest
 from .api import ServerAPI
 from .custom_static import get_custom_static_blueprint
 from .log import FlaskLogHandler
@@ -62,6 +62,7 @@ class AWFlask(Flask):
 
         self.register_blueprint(root)
         self.register_blueprint(rest.blueprint)
+        self.register_blueprint(pcd_rest.pcd_blueprint)
         self.register_blueprint(get_custom_static_blueprint(custom_static))
 
 
