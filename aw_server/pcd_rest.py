@@ -10,15 +10,16 @@ from flask import Blueprint, current_app, jsonify, request
 logger = logging.getLogger(__name__)
 
 USER_CONFIG_PATH = Path.home() / ".pcd_sync_config.json"
+LOG_FILE_PATH = Path.home() / ".pcd_sync_log.json"
 
 ENVIRONMENTS = {
     "local": "http://127.0.0.1:8005",
-    "dev":   "https://api-dev.prescribingcaredirect.co.uk",
-    "qa":    "https://api-qa.prescribingcaredirect.co.uk",
+    "dev":   "https://api.dev.prescribingcaredirect.co.uk",
+    "qa":    "https://api.qa.prescribingcaredirect.co.uk",
     "prod":  "https://api.prescribingcaredirect.co.uk",
 }
-_env = os.environ.get("PCD_ENV", "prod")
-_base_url = os.environ.get("PCD_BASE_URL", ENVIRONMENTS.get(_env, ENVIRONMENTS["prod"])).rstrip("/")
+_env = os.environ.get("PCD_ENV", "dev")
+_base_url = os.environ.get("PCD_BASE_URL", ENVIRONMENTS.get(_env, ENVIRONMENTS["dev"])).rstrip("/")
 _app_secret = os.environ.get("PCD_APP_SECRET", "ACTIVITYWATCH_APP_SECRET")
 
 ADMIN_VERIFY_PATH = "/api/users/admin/verify"
@@ -61,6 +62,12 @@ def _save_config(updates: dict) -> None:
     USER_CONFIG_PATH.write_text(json.dumps(config, indent=2))
 
 
+def _get_base_url() -> str:
+    """Return base URL: config file wins over env var / default."""
+    saved = _load_config().get("pcd_base_url")
+    return saved.rstrip("/") if saved else _base_url
+
+
 def _require_admin(f):
     """Checks X-PCD-Admin-Token header set by the frontend after successful verify."""
     @wraps(f)
@@ -74,32 +81,53 @@ def _require_admin(f):
 
 @pcd_blueprint.route("/verify", methods=["POST"])
 def verify_admin():
-    """Proxy admin credentials to PCD API. On success, store a session token locally."""
+    """Authenticate locally against APP_SECRET — no backend call needed."""
     body = request.get_json(silent=True) or {}
-    username = body.get("username", "")
     password = body.get("password", "")
-    if not username or not password:
-        return jsonify({"error": "username and password are required"}), 400
+    if not password:
+        return jsonify({"error": "Password is required"}), 400
+    if password != _app_secret:
+        return jsonify({"ok": False, "error": "Invalid password"}), 403
+    import secrets
+    token = secrets.token_hex(32)
+    _save_config({"pcd_admin_session_token": token})
+    return jsonify({"ok": True, "token": token})
 
+
+@pcd_blueprint.route("/config", methods=["GET"])
+@_require_admin
+def get_config():
+    """Return current base URL and available environment presets."""
+    return jsonify({
+        "base_url": _get_base_url(),
+        "environments": ENVIRONMENTS,
+    })
+
+
+@pcd_blueprint.route("/config", methods=["PUT"])
+@_require_admin
+def set_config():
+    """Persist a new base URL to the config file."""
+    body = request.get_json(silent=True) or {}
+    new_url = (body.get("base_url") or "").strip().rstrip("/")
+    if not new_url.startswith("http"):
+        return jsonify({"error": "Invalid URL — must start with http"}), 400
+    _save_config({"pcd_base_url": new_url})
+    logger.info(f"PCD base URL updated to: {new_url}")
+    return jsonify({"ok": True, "base_url": new_url})
+
+
+@pcd_blueprint.route("/logs", methods=["GET"])
+@_require_admin
+def get_logs():
+    """Return recent sync log entries written by pcd_sync_client."""
     try:
-        res = requests.post(
-            _base_url + ADMIN_VERIFY_PATH,
-            json={"username": username, "password": password},
-            headers=_pcd_headers(),
-            timeout=10,
-        )
-        if res.status_code == 200:
-            import secrets
-            token = secrets.token_hex(32)
-            _save_config({"pcd_admin_session_token": token})
-            return jsonify({"ok": True, "token": token})
-        try:
-            detail = res.json().get("error", "")
-        except Exception:
-            detail = ""
-        return jsonify({"ok": False, "error": detail or "Invalid credentials"}), 403
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        return jsonify({"error": "Could not reach PCD server"}), 502
+        entries = json.loads(LOG_FILE_PATH.read_text()) if LOG_FILE_PATH.exists() else []
+        if not isinstance(entries, list):
+            entries = []
+    except Exception:
+        entries = []
+    return jsonify({"logs": entries[:200]})
 
 
 @pcd_blueprint.route("/email", methods=["GET"])
@@ -121,7 +149,7 @@ def update_email():
 
     try:
         res = requests.post(
-            _base_url + UPDATE_EMAIL_PATH,
+            _get_base_url() + UPDATE_EMAIL_PATH,
             json={"existing_email": existing_email, "new_email": new_email},
             headers=_pcd_headers(),
             timeout=10,
