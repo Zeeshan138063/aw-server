@@ -159,9 +159,13 @@ def update_email():
             logger.info(f"PCD user email updated: {existing_email} → {new_email}")
             return jsonify({"ok": True, "email": new_email})
         try:
-            detail = res.json().get("error", "")
+            detail = res.json().get("error") or res.json().get("detail") or ""
         except Exception:
             detail = ""
-        return jsonify({"error": detail or f"PCD API error ({res.status_code})"}), res.status_code
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        return jsonify({"error": detail or f"PCD API error ({res.status_code})"}), 400
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"PCD email update request failed: {e}")
         return jsonify({"error": "Could not reach PCD server"}), 502
+    except Exception as e:
+        logger.exception("Unexpected error in update_email")
+        return jsonify({"error": "Internal error"}), 500
