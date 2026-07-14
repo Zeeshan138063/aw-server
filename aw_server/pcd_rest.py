@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import platform
+import subprocess
 from functools import wraps
 from pathlib import Path
 
@@ -24,6 +26,53 @@ _app_secret = os.environ.get("PCD_APP_SECRET", "ACTIVITYWATCH_APP_SECRET")
 
 ADMIN_VERIFY_PATH = "/api/users/admin/verify"
 UPDATE_EMAIL_PATH = "/api/users/update-activity-email"
+
+def _is_vpn_connected() -> bool:
+    """Return True if any VPN is actively connected."""
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            result = subprocess.run(
+                ["scutil", "--nc", "list"], capture_output=True, text=True, timeout=5
+            )
+            if any("(Connected)" in line for line in result.stdout.splitlines()):
+                return True
+            ifc = subprocess.run(
+                ["ifconfig"], capture_output=True, text=True, timeout=5
+            )
+            current_iface = ""
+            for line in ifc.stdout.splitlines():
+                if line and not line[0].isspace():
+                    current_iface = line.split(":")[0]
+                elif current_iface.startswith("utun") and "-->" in line:
+                    return True
+            return False
+        elif system == "Linux":
+            result = subprocess.run(
+                ["ip", "link", "show"], capture_output=True, text=True, timeout=5,
+            )
+            _vpn_prefixes = ("tun", "tap", "wg", "vpn")
+            for line in result.stdout.splitlines():
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    name = parts[1].strip().lower().split("@")[0]
+                    if any(name.startswith(p) for p in _vpn_prefixes) and "UP" in line:
+                        return True
+            return False
+        else:  # Windows
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-Command",
+                    "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } "
+                    "| Select-Object -ExpandProperty InterfaceDescription",
+                ],
+                capture_output=True, text=True, timeout=5,
+            )
+            out = result.stdout.lower()
+            return any(kw in out for kw in ("wireguard", "vpn", "tap-windows", "openvpn"))
+    except Exception:
+        return False
+
 
 pcd_blueprint = Blueprint("pcd", __name__, url_prefix="/api/0/pcd")
 
@@ -77,6 +126,12 @@ def _require_admin(f):
             return jsonify({"error": "Unauthorized"}), 403
         return f(*args, **kwargs)
     return decorated
+
+
+@pcd_blueprint.route("/vpn-status", methods=["GET"])
+def vpn_status():
+    """Return current VPN connection status. No auth required."""
+    return jsonify({"connected": _is_vpn_connected()})
 
 
 @pcd_blueprint.route("/verify", methods=["POST"])
