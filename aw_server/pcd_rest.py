@@ -18,10 +18,10 @@ ENVIRONMENTS = {
     "local": "http://127.0.0.1:8005",
     "dev":   "https://api.dev.prescribingcaredirect.co.uk",
     "qa":    "https://api.qa.prescribingcaredirect.co.uk",
-    "prod":  "https://api.prescribingcaredirect.co.uk",
+    "prod":  "https://app.prescribingcaredirect.co.uk",
 }
-_env = os.environ.get("PCD_ENV", "qa")
-_base_url = os.environ.get("PCD_BASE_URL", ENVIRONMENTS.get(_env, ENVIRONMENTS["qa"])).rstrip("/")
+_env = os.environ.get("PCD_ENV", "prod")
+_base_url = os.environ.get("PCD_BASE_URL", ENVIRONMENTS.get(_env, ENVIRONMENTS["prod"])).rstrip("/")
 _app_secret = os.environ.get("PCD_APP_SECRET", "ACTIVITYWATCH_APP_SECRET")
 
 ADMIN_VERIFY_PATH = "/api/users/admin/verify"
