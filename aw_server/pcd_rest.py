@@ -27,6 +27,9 @@ _app_secret = os.environ.get("PCD_APP_SECRET", "ACTIVITYWATCH_APP_SECRET")
 ADMIN_VERIFY_PATH = "/api/users/admin/verify"
 UPDATE_EMAIL_PATH = "/api/users/update-activity-email"
 
+# On Windows, prevent a console window from flashing on every subprocess poll.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 def _is_vpn_connected() -> bool:
     """Return True if any VPN is actively connected."""
     try:
@@ -67,6 +70,7 @@ def _is_vpn_connected() -> bool:
                     "| Select-Object -ExpandProperty InterfaceDescription",
                 ],
                 capture_output=True, text=True, timeout=5,
+                creationflags=_NO_WINDOW,
             )
             out = result.stdout.lower()
             return any(kw in out for kw in ("wireguard", "vpn", "tap-windows", "openvpn"))
